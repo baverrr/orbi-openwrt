@@ -1,0 +1,8 @@
+recon/
+firmware/
+__pycache__/
+*.pyc
+build/src/
+build/out/
+serial/
+backup/

@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+// RAM-BOOT TEST ONLY. Never flash an image built from this file.
+// Identical to dts/qcom-ipq4019-rbr10.dts except /chosen/bootargs-append is deleted, so the kernel
+// command line has no "ubi.mtd=ubi root=/dev/ubiblock0_0": a RAM boot on the untouched stock flash
+// then never attaches UBI over the stock rootfs. OpenWrt's kernel appends bootargs-append after
+// whatever U-Boot passes (920-device_tree_cmdline.patch), so this can't be done from U-Boot.
+
+#include "../dts/qcom-ipq4019-rbr10.dts"
+
+/ {
+	model = "Netgear RBR10 (RAM test, no ubi.mtd)";
+
+	chosen {
+		/delete-property/ bootargs-append;
+	};
+};

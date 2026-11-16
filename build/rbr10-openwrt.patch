@@ -1,0 +1,436 @@
+diff --git a/package/boot/uboot-tools/uboot-envtools/files/ipq40xx b/package/boot/uboot-tools/uboot-envtools/files/ipq40xx
+index 25e0d5e3be..6eb0f58694 100644
+--- a/package/boot/uboot-tools/uboot-envtools/files/ipq40xx
++++ b/package/boot/uboot-tools/uboot-envtools/files/ipq40xx
+@@ -38,6 +38,7 @@ aruba,ap-365)
+ 	;;
+ buffalo,wtr-m2133hp|\
+ netgear,lbr20|\
++netgear,rbr10|\
+ netgear,rbr20|\
+ netgear,rbs20)
+ 	ubootenv_add_uci_config "/dev/mtd8" "0x0" "0x40000" "0x20000"
+diff --git a/target/linux/ipq40xx/base-files/etc/board.d/02_network b/target/linux/ipq40xx/base-files/etc/board.d/02_network
+index 5193c6cc94..cba415e1b6 100644
+--- a/target/linux/ipq40xx/base-files/etc/board.d/02_network
++++ b/target/linux/ipq40xx/base-files/etc/board.d/02_network
+@@ -44,6 +44,7 @@ ipq40xx_setup_interfaces()
+ 	linksys,whw03v2|\
+ 	luma,wrtq-329acn|\
+ 	mikrotik,cap-ac|\
++	netgear,rbr10|\
+ 	netgear,rbr20|\
+ 	netgear,wac510|\
+ 	sony,ncp-hg100-cellular|\
+diff --git a/target/linux/ipq40xx/base-files/lib/upgrade/platform.sh b/target/linux/ipq40xx/base-files/lib/upgrade/platform.sh
+index 29f77ab95d..4734c3084c 100644
+--- a/target/linux/ipq40xx/base-files/lib/upgrade/platform.sh
++++ b/target/linux/ipq40xx/base-files/lib/upgrade/platform.sh
+@@ -123,6 +123,7 @@ platform_do_upgrade() {
+ 	luma,wrtq-329acn|\
+ 	mobipromo,cm520-79f|\
+ 	netgear,lbr20|\
++	netgear,rbr10|\
+ 	netgear,rbr20|\
+ 	netgear,rbs20|\
+ 	netgear,wac510|\
+diff --git a/target/linux/ipq40xx/dts/qcom-ipq4019-rbr10.dts b/target/linux/ipq40xx/dts/qcom-ipq4019-rbr10.dts
+new file mode 100644
+index 0000000000..8d1c169399
+--- /dev/null
++++ b/target/linux/ipq40xx/dts/qcom-ipq4019-rbr10.dts
+@@ -0,0 +1,359 @@
++// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
++//
++// Netgear Orbi RBR10 (IPQ4019, 512 MB RAM, 128 MB NAND, two ath10k AHB radios).
++// Built on the RBR20 (qcom-ipq4019-rbx20.dtsi), which is the same board family.
++//
++// Where each value comes from (recon/20261115-041036-501381 unless noted):
++//  - Partition table: the stock kernel's own DNI table, decoded from the V2.7.5.6 kernel image
++//    (records of {offset, size, name}). Its sizes match the live /proc/mtd exactly, in the same
++//    order, and the boot chain (0:SBL1 ... 0:ART) matches the live Qualcomm SMEM table in 0:MIBIB
++//    (mibib_ptable.txt, page 1, in 128 KB blocks) and the live DT nodes (dt_partitions.txt).
++//    Live sysfs has no per-partition offset on kernel 3.14 (mtd_sysfs.txt: offset=absent).
++//  - NAND size: 128 MB. ntgrdata, the last partition, ends at 0x8000000, and the SMEM table's
++//    last region ends at 0x7f80000. Earlier notes guessed 256 MB; that was wrong.
++//  - Radio calibration: wifi@a000000 and wifi@a800000 read 0:ART at 0x1000 and 0x5000, length
++//    0x2f20 each (dt_wifi_cal.txt), the same cells as the RBR20.
++//  - MACs: boarddata1 starts with the LAN (br0) MAC at 0x0, WAN at 0x6 (LAN+1) and
++//    5 GHz at 0xc (LAN+2); 0x12 is all zeros (boarddata1_head.txt). Same layout as the RBR20.
++//  - No PCIe radio: the PCI bus registers but no device enumerates (pcie.txt), and only wifi0 and
++//    wifi1 exist (net_dev.txt, dmesg.txt). The QCA9888 firmware on the stock rootfs is unused.
++//  - Switch: LAN = port 4, measured with orbi_telnet.py --probe (recon 20261115-053050-115169).
++//    That's the reverse of the RBR20 and of the stock DT's wan_bmp 0x10. WAN = port 5 is inferred.
++//  - Reset = GPIO 18 and Sync/WPS = GPIO 49, both active-low, measured with --probe (the stock
++//    DT's "wps" label on GPIO 18 is wrong, and the RBR20's WPS GPIO 32 doesn't apply).
++//
++// Not confirmed on the RBR10 (marked UNCONFIRMED below): the LED colours (pins decoded from
++// stock, colours not yet seen), WAN = port 5, the 5 GHz frequency range, the ath10k board-data variant, and the loader's
++// kernel offset (the U-Boot env in 0:APPSBLENV is blank, so its built-in bootcmd wasn't seen).
++//
++// Compiles with one expected warning, for the emptied i2c bus at the end (build/compile-dts.sh,
++// dtc 1.8.1, 2026-11-16). Before the i2c removal it built with none and matched the DTB in the
++// built OpenWrt image byte for byte. RAM-booted 2026-11-15 (serial/20261115-223507-000221) and
++// 2026-11-16 with the GPIO LED fix (serial/20261116-105818-089702: MACs, both radios and the four
++// status LEDs checked). The i2c removal below came after that boot and is not booted yet.
++
++#include "qcom-ipq4019-rbx20.dtsi"
++
++/ {
++	model = "Netgear RBR10";
++	compatible = "netgear,rbr10";
++
++	// 512 MB, confirmed live (MemTotal ~497 MB). The stock DT says 256 MB; U-Boot corrects it
++	// at boot, so this node only matters if a loader doesn't.
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x80000000 0x20000000>;
++	};
++};
++
++&nand {
++	pinctrl-0 = <&nand_pins>;
++	pinctrl-names = "default";
++	status = "okay";
++
++	nand@0 {
++		partitions {
++			compatible = "fixed-partitions";
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			// Qualcomm boot chain: SMEM table in 0:MIBIB, live DT, stock kernel table.
++			partition@0 {
++				label = "0:SBL1";
++				reg = <0x00000000 0x00100000>;
++				read-only;
++			};
++
++			partition@100000 {
++				label = "0:MIBIB";
++				reg = <0x00100000 0x00100000>;
++				read-only;
++			};
++
++			partition@200000 {
++				label = "0:BOOTCONFIG";
++				reg = <0x00200000 0x00100000>;
++				read-only;
++			};
++
++			partition@300000 {
++				label = "0:QSEE";
++				reg = <0x00300000 0x00100000>;
++				read-only;
++			};
++
++			partition@400000 {
++				label = "0:QSEE_1";
++				reg = <0x00400000 0x00100000>;
++				read-only;
++			};
++
++			partition@500000 {
++				label = "0:CDT";
++				reg = <0x00500000 0x00080000>;
++				read-only;
++			};
++
++			partition@580000 {
++				label = "0:CDT_1";
++				reg = <0x00580000 0x00080000>;
++				read-only;
++			};
++
++			partition@600000 {
++				label = "0:BOOTCONFIG1";
++				reg = <0x00600000 0x00080000>;
++				read-only;
++			};
++
++			// Writable as on the RBR20. Blank (all 0xff) on this unit, so U-Boot uses its
++			// built-in environment.
++			partition@680000 {
++				label = "0:APPSBLENV";
++				reg = <0x00680000 0x00080000>;
++			};
++
++			partition@700000 {
++				label = "0:APPSBL";
++				reg = <0x00700000 0x00200000>;
++				read-only;
++			};
++
++			partition@900000 {
++				label = "0:APPSBL_1";
++				reg = <0x00900000 0x00200000>;
++				read-only;
++			};
++
++			partition@b00000 {
++				label = "0:ART";
++				reg = <0x00b00000 0x00080000>;
++				read-only;
++
++				nvmem-layout {
++					compatible = "fixed-layout";
++					#address-cells = <1>;
++					#size-cells = <1>;
++
++					// From the live wifi nodes' qcom,cal-offset/qcom,cal-len. Both end
++					// well inside the 512 KB ART (0x5000 + 0x2f20 = 0x7f20). There is no
++					// precal@9000: that one is the RBR20's PCIe radio.
++					precal_art_1000: precal@1000 {
++						reg = <0x1000 0x2f20>;
++					};
++
++					precal_art_5000: precal@5000 {
++						reg = <0x5000 0x2f20>;
++					};
++				};
++			};
++
++			// From here on: the Netgear partitions from the stock kernel table. The SMEM
++			// table only knows them as two big regions, "rootfs" (0xb80000) and
++			// "rootfs_1" (0x4c80000).
++			partition@b80000 {
++				label = "0:ART.bak";
++				reg = <0x00b80000 0x00080000>;
++				read-only;
++			};
++
++			partition@c00000 {
++				label = "config";
++				reg = <0x00c00000 0x00100000>;
++				read-only;
++			};
++
++			partition@d00000 {
++				label = "boarddata1";
++				reg = <0x00d00000 0x00080000>;
++				read-only;
++
++				nvmem-layout {
++					compatible = "fixed-layout";
++					#address-cells = <1>;
++					#size-cells = <1>;
++
++					mac_address_lan: macaddr@0 {
++						compatible = "mac-base";
++						reg = <0x0 0x6>;
++						#nvmem-cell-cells = <1>;
++					};
++
++					mac_address_wan: macaddr@6 {
++						compatible = "mac-base";
++						reg = <0x6 0x6>;
++						#nvmem-cell-cells = <1>;
++					};
++
++					mac_address_wlan_5g: macaddr@c {
++						compatible = "mac-base";
++						reg = <0xc 0x6>;
++						#nvmem-cell-cells = <1>;
++					};
++				};
++			};
++
++			partition@d80000 {
++				label = "pot";
++				reg = <0x00d80000 0x00080000>;
++				read-only;
++			};
++
++			partition@e00000 {
++				label = "boarddata1.bak";
++				reg = <0x00e00000 0x00080000>;
++				read-only;
++			};
++
++			partition@e80000 {
++				label = "language";
++				reg = <0x00e80000 0x00300000>;
++				read-only;
++			};
++
++			partition@1180000 {
++				label = "cert";
++				reg = <0x01180000 0x00080000>;
++				read-only;
++			};
++
++			// The stock "firmware" partition (0x1200000, 40 MB = stock kernel + squashfs
++			// rootfs + rootfs_data). As on the RBR20, OpenWrt splits it into a 7 MB kernel
++			// (KERNEL_SIZE 7340032 in the image recipe) and UBI for the rest.
++			// UNCONFIRMED: that U-Boot loads the kernel from the start of firmware. The stock
++			// kernel sits there and the DNI table says so, but the loader's built-in bootcmd
++			// wasn't captured. Check it on the serial console before flashing.
++			partition@1200000 {
++				label = "kernel";
++				reg = <0x01200000 0x00700000>;
++			};
++
++			partition@1900000 {
++				label = "ubi";
++				reg = <0x01900000 0x02100000>;
++			};
++
++			// Netgear data (UBI: secdata = ubi1, ntgrdata = ubi0). Kept read-only so a return
++			// to stock still works. UBI could grow over them later.
++			partition@3a00000 {
++				label = "secdata";
++				reg = <0x03a00000 0x00a00000>;
++				read-only;
++			};
++
++			partition@4400000 {
++				label = "ntgrdata";
++				reg = <0x04400000 0x03c00000>;
++				read-only;
++			};
++		};
++	};
++};
++
++// No PCIe radio on the RBR10 (see the header). Drop the RBR20's QCA9888 node with it.
++&pcie0 {
++	status = "disabled";
++};
++
++&pcie_bridge0 {
++	/delete-node/ wifi@0,0;
++};
++
++// UNCONFIRMED: board data. OpenWrt's ipq-wifi has no RBK10 file yet. Build one from the stock
++// /lib/firmware/IPQ4019/hw.1/boardData_1_0_IPQ4019_DK04_{2G,5G}.bin (the files the stock driver
++// picked, dmesg.txt) and name it this variant.
++&wifi0 {
++	qcom,calibration-variant = "Netgear-RBK10";
++};
++
++// The only 5 GHz radio, so not limited to the RBR20's upper band.
++// UNCONFIRMED: the full 5 GHz range; check the stock channel list.
++&wifi1 {
++	/delete-property/ ieee80211-freq-limit;
++	qcom,calibration-variant = "Netgear-RBK10";
++};
++
++// Swapped against the RBR20. Measured with --probe (recon 20261115-053050-115169): with the
++// laptop's cable in the LAN jack, ssdk_sh and swconfig both show link on switch port 4 only
++// (port 5 down; ports 1-3 don't exist, "Illegal parameter"). The stock DT's wan_bmp 0x10 (port 4)
++// is not what the stock firmware actually runs.
++&swport4 {
++	status = "okay";
++
++	label = "lan";
++};
++
++// UNCONFIRMED: WAN = port 5, the only other port. Inferred, since the probe's WAN step was skipped.
++// Check with --probe and a live cable in the WAN jack.
++&swport5 {
++	status = "okay";
++
++	label = "wan";
++	nvmem-cell-names = "mac-address";
++	nvmem-cells = <&mac_address_wan 0>;
++};
++
++// Keys. Both measured with --probe, which watched the pin-controller registers while each button
++// was held. (--probe no longer has a Reset step: a short press factory-resets stock firmware.)
++//  - Reset = GPIO 18, active-low (1 -> 0 while held; recon 20261115-154439-949527). Inherited
++//    unchanged from the RBR20. The stock DT's label "wps" for GPIO 18 is wrong.
++//  - Sync/WPS = GPIO 49, active-low (idle 1, 0 in 8 of 66 rounds; recon 20261115-160023-791469).
++//    The RBR20 uses GPIO 32, so it's overridden here. The RBR20's nodes have no labels, so this
++//    goes by path.
++/ {
++	keys {
++		wps {
++			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
++		};
++	};
++};
++
++// LEDs. Decoded from the stock LED module (lib/modules/3.14.77/atherosgpio.ko in the V2.7.5.6
++// rootfs) and its user tool sbin/ledcontrol; the stock boot log prints the table it chose,
++// "LED = 22, 23,24 ,28, 18,49" (serial/20261115-224044-317833), whose last two are the
++// Reset and WPS GPIOs measured above.
++//  - One status LED with four dies: red = GPIO 22, green = GPIO 23, blue = GPIO 24,
++//    white = GPIO 28. ledcontrol's colour codes (red 0 ... magenta 6) index the module's ioctl
++//    table: each primary lights one pin, amber = 22+23, cyan = 23+24, magenta = 22+24, and
++//    white drives 28 alone.
++//  - All active-low: the module writes (1 - state) and sets every pin to 1 (off) at load.
++//    The RBR20's are active-high.
++//  - GPIO 25, 26 and 27 are not LEDs here: stock leaves them as inputs (recon
++//    20261115-041036-501381, gpio_debugfs.txt), so the RBR20's nodes for them are removed
++//    rather than driven.
++// UNCONFIRMED until the next RAM boot: which colour each pin shows (read from code, not seen).
++/ {
++	leds {
++		/delete-node/ led-0;
++		/delete-node/ led-1;
++	};
++};
++
++&led_status_red {
++	gpios = <&tlmm 22 GPIO_ACTIVE_LOW>;
++	panic-indicator;
++};
++
++&led_status_green {
++	gpios = <&tlmm 23 GPIO_ACTIVE_LOW>;
++};
++
++&led_status_blue {
++	gpios = <&tlmm 24 GPIO_ACTIVE_LOW>;
++};
++
++&led_status_white {
++	gpios = <&tlmm 28 GPIO_ACTIVE_LOW>;
++};
++
++// No TLC59208F on the RBR10, so the RBR20's LED controller and its i2c bus are removed.
++// Second RAM boot (serial/20261116-105818-089702, shell-readonly-4.txt): with gpio20/21 muxed to
++// blsp_i2c0 the bus worked (lines idle high, no -110), but binding tlc591xx to 0-0027 failed
++// with ENXIO, i.e. nothing ACKs 0x27. The stock kernel's "tlc59208f at 0x27" is a client it
++// registers for the whole Orbi family without checking the chip is there.
++&blsp1_i2c3 {
++	status = "disabled";
++	// Leaves the bus with no children, so dtc gives one avoid_unnecessary_addr_size warning.
++	// Deleting #address-cells/#size-cells only swaps it for an i2c_bus_reg one; harmless.
++	/delete-node/ led-controller@27;
++};
+diff --git a/target/linux/ipq40xx/image/generic.mk b/target/linux/ipq40xx/image/generic.mk
+index 38cf7aa467..072a90299e 100644
+--- a/target/linux/ipq40xx/image/generic.mk
++++ b/target/linux/ipq40xx/image/generic.mk
+@@ -1011,6 +1011,30 @@ define Device/netgear_rbr20
+ endef
+ TARGET_DEVICES += netgear_rbr20
+ 
++
++
++define Device/netgear_rbr10
++	$(call Device/DniImage)
++	SOC := qcom-ipq4019
++	DEVICE_VENDOR := NETGEAR
++	DEVICE_MODEL := RBR10
++	NETGEAR_BOARD_ID := RBR10
++	NETGEAR_HW_ID := 29766105+0+128+512+2x2+2x2
++	KERNEL_SIZE := 7340032
++	BLOCKSIZE := 128k
++	PAGESIZE := 2048
++	UBINIZE_OPTS := -E 5
++	IMAGE_SIZE := 40960k
++	IMAGE/factory.img := append-kernel | pad-offset $$$$(BLOCKSIZE) 64 | \
++		append-uImage-fakehdr filesystem | check-size $$$$(KERNEL_SIZE) | \
++		pad-to $$$$(KERNEL_SIZE) | append-ubi | check-size | netgear-dni
++	IMAGE/sysupgrade.bin := append-kernel | pad-offset $$$$(BLOCKSIZE) 64 | \
++		append-uImage-fakehdr filesystem | check-size $$$$(KERNEL_SIZE) | \
++		sysupgrade-tar kernel=$$$$@ | append-metadata
++	DEVICE_PACKAGES :=
++endef
++TARGET_DEVICES += netgear_rbr10
++
+ define Device/netgear_rbs20
+ 	$(call Device/netgear_rbx20)
+ 	DEVICE_MODEL := RBS20

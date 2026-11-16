@@ -1,0 +1,22 @@
+Serial console, first boot after flashing OpenWrt to the RBR10's NAND
+(abridged; MAC and other per-unit lines removed).
+
+U-Boot verifies and boots the unsigned image:
+
+    FW is not SIGNED
+    if iminfo 0x84000000; then echo kernel checksum OK !; \
+      if iminfo 0x8439FFC0; then echo rootfs checksum OK !; boot_partition_set 1; ...
+    kernel checksum OK !
+    rootfs checksum OK !
+
+Kernel comes up as OpenWrt on the RBR10:
+
+    [    0.000000] Linux version 6.18.60 (builder@openwrt) (OpenWrt GCC 14.4.0 ...) #0 SMP
+    [    0.000000] OF: fdt: Machine model: Netgear RBR10
+
+UBI overlay is created on the flash and userspace starts:
+
+    [   11.175817] UBIFS (ubi0:1): UBIFS: mounted UBI device 0, volume 1, name "rootfs_data"
+    [   11.182708] UBIFS (ubi0:1): FS size: 24887296 bytes (23 MiB, 196 LEBs) ...
+    [   12.540129] procd: - init -
+    Please press Enter to activate this console.
